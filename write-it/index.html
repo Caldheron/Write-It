@@ -52,9 +52,14 @@
             Écrire
           </button>
 
-          <button id="btn-history" class="btn btn-secondary">
-            Historique
-          </button>
+          <div class="dashboard-actions">
+            <button id="btn-history" class="btn btn-secondary btn-dashboard">
+              Historique
+            </button>
+            <button id="btn-edition" class="btn btn-secondary btn-dashboard">
+              Édition
+            </button>
+          </div>
         </div>
       </section>
 
@@ -90,6 +95,18 @@
           <h2>Historique</h2>
         </div>
         <div id="history-list" class="history-list">
+          <!-- Filled by JS -->
+        </div>
+      </section>
+
+      <!-- EDITION (reorder + preview) -->
+      <section id="view-edition" class="view">
+        <div class="history-header">
+          <button id="btn-back-edition" class="icon-btn">←</button>
+          <h2>Édition</h2>
+        </div>
+        <p class="edition-hint">Maintiens appuyé puis glisse pour réordonner</p>
+        <div id="edition-list" class="history-list edition-list">
           <!-- Filled by JS -->
         </div>
       </section>

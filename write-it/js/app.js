@@ -16,7 +16,8 @@
   let data = {
     currentDate: null,
     currentText: '',
-    history: {},       // { "YYYY-MM-DD": { text, words } }
+    history: {},          // { "YYYY-MM-DD": { text, words } }
+    order: [],            // ordre personnalisé des dates pour la vue Édition
     streak: 0,
     lastNotifDate: null,
     notifEnabled: false
@@ -24,6 +25,7 @@
 
   let currentEditDate = null;
   let saveTimeout = null;
+  let dragState = null;   // pour le drag & drop
 
   // ===== HELPERS DATE =====
   function getToday() {
@@ -54,6 +56,13 @@
     return text.trim().split(/\s+/).filter(Boolean).length;
   }
 
+  function getPreview(text, max = 50) {
+    if (!text) return '(Note vide)';
+    const clean = text.replace(/\s+/g, ' ').trim();
+    if (clean.length <= max) return clean;
+    return clean.slice(0, max).trim() + '…';
+  }
+
   // ===== STOCKAGE =====
   function loadData() {
     try {
@@ -65,6 +74,10 @@
     } catch (e) {
       console.warn('Erreur chargement données', e);
     }
+
+    // S'assurer que order existe et contient toutes les dates
+    if (!Array.isArray(data.order)) data.order = [];
+    syncOrder();
     ensureCurrentDay();
   }
 
@@ -76,10 +89,22 @@
     }
   }
 
+  function syncOrder() {
+    // Ajoute les nouvelles dates en tête, garde l'ordre existant pour les autres
+    const existing = new Set(data.order);
+    const allDates = Object.keys(data.history);
+
+    // Nouvelles dates (pas encore dans order) → en haut
+    const newDates = allDates.filter(d => !existing.has(d)).sort().reverse();
+    // Dates encore valides dans l'ancien order
+    const kept = data.order.filter(d => data.history[d]);
+
+    data.order = [...newDates, ...kept];
+  }
+
   function ensureCurrentDay() {
     const today = getToday();
 
-    // Si on change de jour → archiver l'ancien texte
     if (data.currentDate && data.currentDate !== today) {
       archiveCurrentDay();
     }
@@ -100,9 +125,9 @@
         text: data.currentText,
         words: words
       };
+      syncOrder();
     }
 
-    // Calcul du streak
     updateStreak();
     data.currentText = '';
   }
@@ -112,24 +137,21 @@
     let streak = 0;
     let expected = getToday();
 
-    // Si aujourd'hui a déjà 100+ mots, on commence par aujourd'hui
     const todayWords = countWords(data.currentText);
     if (todayWords >= GOAL) {
       streak = 1;
-      // On recule d'un jour pour la suite
       const d = new Date();
       d.setDate(d.getDate() - 1);
       expected = formatDate(d);
     } else {
-      // On regarde à partir d'hier
       const d = new Date();
       d.setDate(d.getDate() - 1);
       expected = formatDate(d);
     }
 
     for (const date of dates) {
-      if (date === getToday() && todayWords >= GOAL) continue; // déjà compté
-      if (date === expected && data.history[date].words >= GOAL) {
+      if (date === getToday() && todayWords >= GOAL) continue;
+      if (date === expected && data.history[date] && data.history[date].words >= GOAL) {
         streak++;
         const d = new Date(expected);
         d.setDate(d.getDate() - 1);
@@ -169,9 +191,7 @@
     if (words >= GOAL) {
       countEl.classList.add('reached');
       fill.classList.add('reached');
-      status.textContent = words >= GOAL
-        ? (words >= 200 ? 'Excellent ! Belle session ✍️' : 'Objectif atteint ! 🎉')
-        : '';
+      status.textContent = words >= 200 ? 'Excellent ! Belle session ✍️' : 'Objectif atteint ! 🎉';
     } else {
       countEl.classList.remove('reached');
       fill.classList.remove('reached');
@@ -180,7 +200,6 @@
         : `Encore ${GOAL - words} mot${GOAL - words > 1 ? 's' : ''} pour atteindre l'objectif`;
     }
 
-    // Streak
     updateStreak();
     $('streak-count').textContent = data.streak;
     $('streak-plural').textContent = data.streak > 1 ? 's' : '';
@@ -199,9 +218,7 @@
       counter.classList.remove('reached');
     }
 
-    // Limite soft à 2000
     if (words > MAX_WORDS) {
-      // On laisse écrire mais on prévient
       $('max-hint').textContent = `⚠️ Au-delà de ${MAX_WORDS} mots`;
       $('max-hint').style.color = 'var(--danger)';
     } else {
@@ -217,7 +234,7 @@
     setTimeout(() => el.classList.remove('visible'), 1500);
   }
 
-  // ===== HISTORIQUE =====
+  // ===== HISTORIQUE (par date) =====
   function renderHistory() {
     const list = $('history-list');
     const dates = Object.keys(data.history).sort().reverse();
@@ -239,8 +256,128 @@
     }).join('');
 
     list.querySelectorAll('.history-item').forEach(item => {
-      item.addEventListener('click', () => {
+      item.addEventListener('click', () => openEdit(item.dataset.date));
+    });
+  }
+
+  // ===== ÉDITION (preview + reorder) =====
+  function renderEdition() {
+    const list = $('edition-list');
+    syncOrder();
+
+    if (data.order.length === 0) {
+      list.innerHTML = '<p class="history-empty">Aucune note pour le moment.<br>Écris un peu aujourd\'hui !</p>';
+      return;
+    }
+
+    list.innerHTML = data.order.map(date => {
+      const entry = data.history[date];
+      if (!entry) return '';
+      const reached = entry.words >= GOAL ? 'reached' : '';
+      const preview = getPreview(entry.text, 50);
+      return `
+        <div class="history-item" data-date="${date}" draggable="false">
+          <span class="history-item-preview">${escapeHtml(preview)}</span>
+          <span class="history-item-words ${reached}">${entry.words}</span>
+        </div>
+      `;
+    }).join('');
+
+    // Drag & drop (pointer events pour mobile + desktop)
+    setupDragAndDrop(list);
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function setupDragAndDrop(list) {
+    let longPressTimer = null;
+    let startY = 0;
+    let currentItem = null;
+    let placeholder = null;
+
+    list.querySelectorAll('.history-item').forEach(item => {
+      // Click normal → ouvrir l'édition
+      item.addEventListener('click', (e) => {
+        if (dragState) return; // on ignore si on vient de drag
         openEdit(item.dataset.date);
+      });
+
+      // Pointer events pour long-press + drag
+      item.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        startY = e.clientY;
+        currentItem = item;
+
+        longPressTimer = setTimeout(() => {
+          // Début du drag
+          dragState = { item, startIndex: [...list.children].indexOf(item) };
+          item.classList.add('dragging');
+          item.setPointerCapture(e.pointerId);
+
+          // Feedback haptique si disponible
+          if (navigator.vibrate) navigator.vibrate(30);
+        }, 400); // 400ms de long-press
+      });
+
+      item.addEventListener('pointermove', (e) => {
+        if (!dragState || dragState.item !== item) {
+          // Si on bouge trop avant le long-press, on annule
+          if (longPressTimer && Math.abs(e.clientY - startY) > 10) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          return;
+        }
+
+        e.preventDefault();
+        const y = e.clientY;
+        const siblings = [...list.querySelectorAll('.history-item:not(.dragging)')];
+
+        let nextSibling = null;
+        for (const sib of siblings) {
+          const rect = sib.getBoundingClientRect();
+          const mid = rect.top + rect.height / 2;
+          if (y < mid) {
+            nextSibling = sib;
+            break;
+          }
+        }
+
+        if (nextSibling) {
+          list.insertBefore(item, nextSibling);
+        } else {
+          list.appendChild(item);
+        }
+      });
+
+      item.addEventListener('pointerup', (e) => {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+
+        if (dragState && dragState.item === item) {
+          item.classList.remove('dragging');
+          item.releasePointerCapture(e.pointerId);
+
+          // Mettre à jour l'ordre
+          const newOrder = [...list.querySelectorAll('.history-item')].map(el => el.dataset.date);
+          data.order = newOrder;
+          saveData();
+
+          // Petit délai pour éviter le click après drag
+          setTimeout(() => { dragState = null; }, 50);
+        }
+      });
+
+      item.addEventListener('pointercancel', () => {
+        clearTimeout(longPressTimer);
+        if (dragState && dragState.item === item) {
+          item.classList.remove('dragging');
+          dragState = null;
+        }
       });
     });
   }
@@ -289,10 +426,12 @@
     if (permission === 'granted') {
       data.notifEnabled = true;
       saveData();
-      // Notification de test
+      // Notification de test avec son si possible
       new Notification('Write-it', {
         body: 'Notifications activées ! Tu recevras un rappel vers 18h.',
-        icon: 'icons/icon-192.png'
+        icon: 'icons/icon-192.png',
+        silent: false,
+        requireInteraction: false
       });
     }
   }
@@ -303,17 +442,17 @@
     const now = new Date();
     const today = getToday();
 
-    // Si on a déjà notifié aujourd'hui, on sort
     if (data.lastNotifDate === today) return;
 
-    // Si l'heure est >= 18h et que l'objectif n'est pas atteint
     if (now.getHours() >= NOTIF_HOUR) {
       const words = countWords(data.currentText);
       if (words < GOAL) {
         new Notification('Write-it', {
           body: 'C\'est l\'heure d\'écrire tes 100 mots ✍️',
           icon: 'icons/icon-192.png',
-          tag: 'writeit-daily'
+          tag: 'writeit-daily',
+          silent: false,           // essaie de jouer le son système
+          requireInteraction: true // reste visible plus longtemps
         });
         data.lastNotifDate = today;
         saveData();
@@ -366,7 +505,20 @@
       showView('view-dashboard');
     });
 
+    $('btn-edition').addEventListener('click', () => {
+      renderEdition();
+      showView('view-edition');
+    });
+
+    $('btn-back-edition').addEventListener('click', () => {
+      updateDashboard();
+      showView('view-dashboard');
+    });
+
     $('btn-back-edit').addEventListener('click', () => {
+      // Retour vers la vue d'où on vient (historique ou édition)
+      // Par simplicité on retourne à l'historique
+      renderHistory();
       showView('view-history');
     });
 
@@ -398,7 +550,7 @@
       updateDashboard();
     });
 
-    // Édition historique
+    // Édition d'une note
     $('edit-editor').addEventListener('input', () => {
       updateEditCounter();
       clearTimeout(saveTimeout);
@@ -424,7 +576,6 @@
         };
         saveData();
         showSaveStatus('edit-save-status');
-        renderHistory();
       }
     });
 
@@ -433,7 +584,7 @@
     $('btn-export').addEventListener('click', exportData);
     $('btn-reset').addEventListener('click', resetApp);
 
-    // Vérifier le changement de jour périodiquement
+    // Vérifier le changement de jour + notifications
     setInterval(() => {
       const previousDate = data.currentDate;
       ensureCurrentDay();
@@ -445,7 +596,7 @@
         }
       }
       checkAndNotify();
-    }, 30000); // toutes les 30s
+    }, 30000);
   }
 
   // ===== SERVICE WORKER =====
@@ -465,7 +616,6 @@
     registerSW();
     checkAndNotify();
 
-    // Gestion du retour arrière du navigateur (optionnel)
     window.addEventListener('focus', () => {
       ensureCurrentDay();
       updateDashboard();
@@ -473,6 +623,5 @@
     });
   }
 
-  // Lancer
   document.addEventListener('DOMContentLoaded', init);
 })();
