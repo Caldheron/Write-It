@@ -48,6 +48,11 @@
             <span id="streak-count">0</span> jour<span id="streak-plural">s</span> d'affilée
           </div>
 
+          <div class="total-words-card" id="total-words-card">
+            <span class="total-label">Total écrit</span>
+            <span class="total-number" id="total-words">0</span> mots
+          </div>
+
           <button id="btn-write" class="btn btn-primary btn-large">
             Écrire
           </button>
@@ -66,7 +71,7 @@
       <!-- WRITE -->
       <section id="view-write" class="view">
         <div class="write-header">
-          <button id="btn-back-write" class="icon-btn">←</button>
+          <button id="btn-back-write" class="icon-btn back-btn" aria-label="Retour">←</button>
           <div class="write-counter" id="write-counter">
             <span id="live-count">0</span> / 100 mots
           </div>
@@ -91,7 +96,7 @@
       <!-- HISTORY -->
       <section id="view-history" class="view">
         <div class="history-header">
-          <button id="btn-back-history" class="icon-btn">←</button>
+          <button id="btn-back-history" class="icon-btn back-btn" aria-label="Retour">←</button>
           <h2>Historique</h2>
         </div>
         <div id="history-list" class="history-list">
@@ -99,13 +104,13 @@
         </div>
       </section>
 
-      <!-- EDITION (reorder + preview) -->
+      <!-- EDITION (preview + reorder) -->
       <section id="view-edition" class="view">
         <div class="history-header">
-          <button id="btn-back-edition" class="icon-btn">←</button>
+          <button id="btn-back-edition" class="icon-btn back-btn" aria-label="Retour">←</button>
           <h2>Édition</h2>
         </div>
-        <p class="edition-hint">Maintiens appuyé puis glisse pour réordonner</p>
+        <p class="edition-hint">Utilise les flèches pour réordonner les notes</p>
         <div id="edition-list" class="history-list edition-list">
           <!-- Filled by JS -->
         </div>
@@ -114,7 +119,7 @@
       <!-- EDIT NOTE -->
       <section id="view-edit" class="view">
         <div class="write-header">
-          <button id="btn-back-edit" class="icon-btn">←</button>
+          <button id="btn-back-edit" class="icon-btn back-btn" aria-label="Retour">←</button>
           <div class="write-counter" id="edit-date-label"></div>
           <div class="write-actions">
             <button id="btn-save-edit" class="icon-btn" title="Sauvegarder">💾</button>
@@ -132,22 +137,21 @@
       <!-- SETTINGS -->
       <section id="view-settings" class="view">
         <div class="history-header">
-          <button id="btn-back-settings" class="icon-btn">←</button>
+          <button id="btn-back-settings" class="icon-btn back-btn" aria-label="Retour">←</button>
           <h2>Paramètres</h2>
         </div>
         
         <div class="settings-content">
           <div class="setting-item">
-            <label>Notifications</label>
-            <p class="setting-desc">Rappel quotidien à 18h00</p>
-            <button id="btn-enable-notif" class="btn btn-secondary btn-small">Activer les notifications</button>
-            <p id="notif-status" class="setting-status"></p>
-          </div>
-
-          <div class="setting-item">
             <label>Données</label>
             <p class="setting-desc">Tout est stocké localement sur ton appareil.</p>
-            <button id="btn-export" class="btn btn-secondary btn-small">Exporter les données</button>
+            <div class="settings-buttons">
+              <button id="btn-export" class="btn btn-secondary btn-small">Exporter JSON</button>
+              <button id="btn-export-md" class="btn btn-secondary btn-small">Exporter Markdown</button>
+              <button id="btn-import" class="btn btn-secondary btn-small">Importer JSON</button>
+            </div>
+            <input type="file" id="import-file" accept=".json,application/json" hidden>
+            <p id="import-status" class="setting-status"></p>
           </div>
 
           <div class="setting-item danger">

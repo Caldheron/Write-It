@@ -1,4 +1,4 @@
-const CACHE_NAME = 'writeit-v1';
+const CACHE_NAME = 'writeit-v4';
 const ASSETS = [
   './',
   './index.html',

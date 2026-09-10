@@ -10,7 +10,6 @@
   const STORAGE_KEY = 'writeit_data';
   const GOAL = 100;
   const MAX_WORDS = 2000;
-  const NOTIF_HOUR = 18;
 
   // ===== ÉTAT =====
   let data = {
@@ -18,14 +17,12 @@
     currentText: '',
     history: {},          // { "YYYY-MM-DD": { text, words } }
     order: [],            // ordre personnalisé des dates pour la vue Édition
-    streak: 0,
-    lastNotifDate: null,
-    notifEnabled: false
+    streak: 0
   };
 
   let currentEditDate = null;
+  let cameFromView = 'view-history'; // pour savoir où retourner après édition
   let saveTimeout = null;
-  let dragState = null;   // pour le drag & drop
 
   // ===== HELPERS DATE =====
   function getToday() {
@@ -75,7 +72,6 @@
       console.warn('Erreur chargement données', e);
     }
 
-    // S'assurer que order existe et contient toutes les dates
     if (!Array.isArray(data.order)) data.order = [];
     syncOrder();
     ensureCurrentDay();
@@ -90,13 +86,10 @@
   }
 
   function syncOrder() {
-    // Ajoute les nouvelles dates en tête, garde l'ordre existant pour les autres
     const existing = new Set(data.order);
     const allDates = Object.keys(data.history);
 
-    // Nouvelles dates (pas encore dans order) → en haut
     const newDates = allDates.filter(d => !existing.has(d)).sort().reverse();
-    // Dates encore valides dans l'ancien order
     const kept = data.order.filter(d => data.history[d]);
 
     data.order = [...newDates, ...kept];
@@ -203,6 +196,13 @@
     updateStreak();
     $('streak-count').textContent = data.streak;
     $('streak-plural').textContent = data.streak > 1 ? 's' : '';
+
+    // Total words (history + current day)
+    let total = countWords(data.currentText);
+    Object.values(data.history).forEach(entry => {
+      total += entry.words || 0;
+    });
+    $('total-words').textContent = total.toLocaleString('fr-FR');
   }
 
   function updateWriteCounter() {
@@ -256,11 +256,14 @@
     }).join('');
 
     list.querySelectorAll('.history-item').forEach(item => {
-      item.addEventListener('click', () => openEdit(item.dataset.date));
+      item.addEventListener('click', () => {
+        cameFromView = 'view-history';
+        openEdit(item.dataset.date);
+      });
     });
   }
 
-  // ===== ÉDITION (preview + reorder) =====
+  // ===== ÉDITION (preview + reorder avec flèches) =====
   function renderEdition() {
     const list = $('edition-list');
     syncOrder();
@@ -270,116 +273,69 @@
       return;
     }
 
-    list.innerHTML = data.order.map(date => {
+    list.innerHTML = data.order.map((date, index) => {
       const entry = data.history[date];
       if (!entry) return '';
       const reached = entry.words >= GOAL ? 'reached' : '';
       const preview = getPreview(entry.text, 50);
+      const isFirst = index === 0;
+      const isLast = index === data.order.length - 1;
+
       return `
-        <div class="history-item" data-date="${date}" draggable="false">
+        <div class="history-item" data-date="${date}">
+          <div class="reorder-controls">
+            <button class="reorder-btn btn-up" data-index="${index}" ${isFirst ? 'disabled' : ''} aria-label="Monter">▲</button>
+            <button class="reorder-btn btn-down" data-index="${index}" ${isLast ? 'disabled' : ''} aria-label="Descendre">▼</button>
+          </div>
           <span class="history-item-preview">${escapeHtml(preview)}</span>
           <span class="history-item-words ${reached}">${entry.words}</span>
         </div>
       `;
     }).join('');
 
-    // Drag & drop (pointer events pour mobile + desktop)
-    setupDragAndDrop(list);
+    // Clic sur la note → ouvrir l'édition
+    list.querySelectorAll('.history-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        // Ne pas ouvrir si on a cliqué sur une flèche
+        if (e.target.closest('.reorder-btn')) return;
+        cameFromView = 'view-edition';
+        openEdit(item.dataset.date);
+      });
+    });
+
+    // Flèches de réordonnancement
+    list.querySelectorAll('.btn-up').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index, 10);
+        if (idx > 0) {
+          moveItem(idx, idx - 1);
+        }
+      });
+    });
+
+    list.querySelectorAll('.btn-down').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.index, 10);
+        if (idx < data.order.length - 1) {
+          moveItem(idx, idx + 1);
+        }
+      });
+    });
+  }
+
+  function moveItem(fromIndex, toIndex) {
+    const item = data.order.splice(fromIndex, 1)[0];
+    data.order.splice(toIndex, 0, item);
+    saveData();
+    renderEdition();
   }
 
   function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
-  }
-
-  function setupDragAndDrop(list) {
-    let longPressTimer = null;
-    let startY = 0;
-    let currentItem = null;
-    let placeholder = null;
-
-    list.querySelectorAll('.history-item').forEach(item => {
-      // Click normal → ouvrir l'édition
-      item.addEventListener('click', (e) => {
-        if (dragState) return; // on ignore si on vient de drag
-        openEdit(item.dataset.date);
-      });
-
-      // Pointer events pour long-press + drag
-      item.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return;
-        startY = e.clientY;
-        currentItem = item;
-
-        longPressTimer = setTimeout(() => {
-          // Début du drag
-          dragState = { item, startIndex: [...list.children].indexOf(item) };
-          item.classList.add('dragging');
-          item.setPointerCapture(e.pointerId);
-
-          // Feedback haptique si disponible
-          if (navigator.vibrate) navigator.vibrate(30);
-        }, 400); // 400ms de long-press
-      });
-
-      item.addEventListener('pointermove', (e) => {
-        if (!dragState || dragState.item !== item) {
-          // Si on bouge trop avant le long-press, on annule
-          if (longPressTimer && Math.abs(e.clientY - startY) > 10) {
-            clearTimeout(longPressTimer);
-            longPressTimer = null;
-          }
-          return;
-        }
-
-        e.preventDefault();
-        const y = e.clientY;
-        const siblings = [...list.querySelectorAll('.history-item:not(.dragging)')];
-
-        let nextSibling = null;
-        for (const sib of siblings) {
-          const rect = sib.getBoundingClientRect();
-          const mid = rect.top + rect.height / 2;
-          if (y < mid) {
-            nextSibling = sib;
-            break;
-          }
-        }
-
-        if (nextSibling) {
-          list.insertBefore(item, nextSibling);
-        } else {
-          list.appendChild(item);
-        }
-      });
-
-      item.addEventListener('pointerup', (e) => {
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-
-        if (dragState && dragState.item === item) {
-          item.classList.remove('dragging');
-          item.releasePointerCapture(e.pointerId);
-
-          // Mettre à jour l'ordre
-          const newOrder = [...list.querySelectorAll('.history-item')].map(el => el.dataset.date);
-          data.order = newOrder;
-          saveData();
-
-          // Petit délai pour éviter le click après drag
-          setTimeout(() => { dragState = null; }, 50);
-        }
-      });
-
-      item.addEventListener('pointercancel', () => {
-        clearTimeout(longPressTimer);
-        if (dragState && dragState.item === item) {
-          item.classList.remove('dragging');
-          dragState = null;
-        }
-      });
-    });
   }
 
   function openEdit(date) {
@@ -396,71 +352,7 @@
     $('edit-word-count').textContent = `${words} mot${words > 1 ? 's' : ''}`;
   }
 
-  // ===== NOTIFICATIONS =====
-  function updateNotifStatus() {
-    const status = $('notif-status');
-    if (!('Notification' in window)) {
-      status.textContent = 'Notifications non supportées sur ce navigateur';
-      return;
-    }
-
-    if (Notification.permission === 'granted') {
-      status.textContent = 'Notifications activées ✓';
-      data.notifEnabled = true;
-    } else if (Notification.permission === 'denied') {
-      status.textContent = 'Permission refusée. Tu peux la réactiver dans les réglages du navigateur.';
-    } else {
-      status.textContent = 'Clique pour autoriser les notifications';
-    }
-  }
-
-  async function requestNotificationPermission() {
-    if (!('Notification' in window)) {
-      alert('Les notifications ne sont pas supportées sur ce navigateur.');
-      return;
-    }
-
-    const permission = await Notification.requestPermission();
-    updateNotifStatus();
-
-    if (permission === 'granted') {
-      data.notifEnabled = true;
-      saveData();
-      // Notification de test avec son si possible
-      new Notification('Write-it', {
-        body: 'Notifications activées ! Tu recevras un rappel vers 18h.',
-        icon: 'icons/icon-192.png',
-        silent: false,
-        requireInteraction: false
-      });
-    }
-  }
-
-  function checkAndNotify() {
-    if (!data.notifEnabled || Notification.permission !== 'granted') return;
-
-    const now = new Date();
-    const today = getToday();
-
-    if (data.lastNotifDate === today) return;
-
-    if (now.getHours() >= NOTIF_HOUR) {
-      const words = countWords(data.currentText);
-      if (words < GOAL) {
-        new Notification('Write-it', {
-          body: 'C\'est l\'heure d\'écrire tes 100 mots ✍️',
-          icon: 'icons/icon-192.png',
-          tag: 'writeit-daily',
-          silent: false,           // essaie de jouer le son système
-          requireInteraction: true // reste visible plus longtemps
-        });
-        data.lastNotifDate = today;
-        saveData();
-      }
-    }
-  }
-
-  // ===== EXPORT / RESET =====
+  // ===== EXPORT / IMPORT / RESET =====
   function exportData() {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -469,6 +361,104 @@
     a.download = `writeit-backup-${getToday()}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function exportMarkdown() {
+    const today = getToday();
+    let md = `# Write-it — Export du ${formatDisplayDate(today)}\n\n`;
+
+    // Use custom order if available, otherwise chronological reverse
+    let dates = data.order && data.order.length > 0
+      ? [...data.order]
+      : Object.keys(data.history).sort().reverse();
+
+    // Also include current day if it has text and isn't already in history
+    if (data.currentText && data.currentText.trim() && !data.history[data.currentDate]) {
+      dates = [data.currentDate, ...dates.filter(d => d !== data.currentDate)];
+    }
+
+    if (dates.length === 0) {
+      md += '*Aucune note pour le moment.*\n';
+    } else {
+      dates.forEach(date => {
+        let text = '';
+        let words = 0;
+
+        if (date === data.currentDate && data.currentText) {
+          text = data.currentText;
+          words = countWords(text);
+        } else if (data.history[date]) {
+          text = data.history[date].text || '';
+          words = data.history[date].words || countWords(text);
+        }
+
+        if (!text && words === 0) return;
+
+        md += `## ${formatDisplayDate(date)}\n`;
+        md += `*${words} mot${words > 1 ? 's' : ''}*\n\n`;
+        md += text.trim() + '\n\n';
+        md += '---\n\n';
+      });
+    }
+
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `writeit-export-${today}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importData(file) {
+    const status = $('import-status');
+    status.textContent = 'Import en cours…';
+    status.style.color = 'var(--text-muted)';
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target.result);
+
+        if (!imported || typeof imported !== 'object') {
+          throw new Error('Fichier invalide');
+        }
+
+        // Confirmation
+        const noteCount = imported.history ? Object.keys(imported.history).length : 0;
+        const msg = `Importer ces données ?\n\n${noteCount} note(s) trouvée(s).\nCela remplacera les données actuelles.`;
+        if (!confirm(msg)) {
+          status.textContent = 'Import annulé';
+          return;
+        }
+
+        // Remplacement
+        data = {
+          currentDate: imported.currentDate || getToday(),
+          currentText: imported.currentText || '',
+          history: imported.history || {},
+          order: Array.isArray(imported.order) ? imported.order : [],
+          streak: imported.streak || 0
+        };
+
+        syncOrder();
+        ensureCurrentDay();
+        saveData();
+        updateDashboard();
+
+        status.textContent = `Import réussi ✓ (${Object.keys(data.history).length} notes)`;
+        status.style.color = 'var(--accent)';
+      } catch (err) {
+        console.error(err);
+        status.textContent = 'Erreur : fichier JSON invalide';
+        status.style.color = 'var(--danger)';
+      }
+    };
+    reader.onerror = () => {
+      status.textContent = 'Erreur de lecture du fichier';
+      status.style.color = 'var(--danger)';
+    };
+    reader.readAsText(file);
   }
 
   function resetApp() {
@@ -516,14 +506,18 @@
     });
 
     $('btn-back-edit').addEventListener('click', () => {
-      // Retour vers la vue d'où on vient (historique ou édition)
-      // Par simplicité on retourne à l'historique
-      renderHistory();
-      showView('view-history');
+      // Retour vers la bonne vue
+      if (cameFromView === 'view-edition') {
+        renderEdition();
+        showView('view-edition');
+      } else {
+        renderHistory();
+        showView('view-history');
+      }
     });
 
     $('btn-settings').addEventListener('click', () => {
-      updateNotifStatus();
+      $('import-status').textContent = '';
       showView('view-settings');
     });
 
@@ -580,11 +574,21 @@
     });
 
     // Settings
-    $('btn-enable-notif').addEventListener('click', requestNotificationPermission);
     $('btn-export').addEventListener('click', exportData);
+    $('btn-export-md').addEventListener('click', exportMarkdown);
+    $('btn-import').addEventListener('click', () => {
+      $('import-file').click();
+    });
+    $('import-file').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        importData(file);
+        e.target.value = ''; // reset pour pouvoir réimporter le même fichier
+      }
+    });
     $('btn-reset').addEventListener('click', resetApp);
 
-    // Vérifier le changement de jour + notifications
+    // Vérifier le changement de jour
     setInterval(() => {
       const previousDate = data.currentDate;
       ensureCurrentDay();
@@ -595,7 +599,6 @@
           updateWriteCounter();
         }
       }
-      checkAndNotify();
     }, 30000);
   }
 
@@ -614,12 +617,10 @@
     bindEvents();
     updateDashboard();
     registerSW();
-    checkAndNotify();
 
     window.addEventListener('focus', () => {
       ensureCurrentDay();
       updateDashboard();
-      checkAndNotify();
     });
   }
 
